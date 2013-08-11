@@ -96,8 +96,10 @@ may provide non-standard devices on port numbers above or below this range.
 
 Port 0: Wait for Hardware Event
 ===============================
-This is used to determine if Ngaro should enter a wait for hardware event
-loop. It should be set to 0, then use the WAIT instruction.
+This port is used to synchronize communication between the ngaro and
+the virtual hardware devices.
+
+See the description of the WAIT opcode for details.
 
 Usage Example:
 
@@ -126,7 +128,8 @@ Ngaro provides a hardware character generator. This takes data off the stack,
 so you should make sure the character value is *on the stack* before using it.
 To use this, write the value 1 to port 2 and wait for an I/O event.
 
-The VM is expected to clear the screen when a negative value is passed.
+When a negative value is passed, the VM should clear the screen and position
+the cursor in the upper left corner.
 
 Usage Example:
 
@@ -164,9 +167,13 @@ then read the value back in from port 4.
 +------+-----------------------+---------+---------------------------------+
 | Op   | Takes                 | Returns | Notes                           |
 +======+=======================+=========+=================================+
+|  1   | -                     | 0       | Save the image                  |
++------+-----------------------+---------+---------------------------------+
+|  2   | filename              | 0       | Include a file ( like --with )  |
++------+-----------------------+---------+---------------------------------+
 | -1   | filename, mode        | handle  | Open a file                     |
 +------+-----------------------+---------+---------------------------------+
-| -2   | handle                | flag    | Read a byte from a file         |
+| -2   | handle                | byte    | Read a byte from a file         |
 +------+-----------------------+---------+---------------------------------+
 | -3   | character, handle     | flag    | Write a byte to a file          |
 +------+-----------------------+---------+---------------------------------+
@@ -253,14 +260,20 @@ Set port 5 to one of the following values; wait; then read the result back.
 +-------+---------------------------------------+
 | -15   | -1 if Port 8 enabled, 0 if disabled   |
 +-------+---------------------------------------+
+| -16   | Return max depth of data stack        |
++-------+---------------------------------------+
+| -17   | Return max depth of address stack     |
++-------+---------------------------------------+
 
 At a minimum, an implementation must provide support for -1, -5, -6, -8, and -9.
 
+For -5 and -6, "depth" refers to the number of items on the specified stack.
+
 For -10, the application must provide a buffer address on the stack, and a
 pointer to a string. The VM should search the system environment for the
-string and copy its value to the application memory, starting at the providedbuffer address.
-If an environment variable is not found, the VM should store a value of zero in the provided
-buffer address.
+string and copy its value to the application memory, starting at the provided
+buffer address. If an environment variable is not found, the VM should store a
+value of zero in the provided buffer address.
 
 For -13, if the returned value is zero, the image can assume a 32-bit environment.
 
@@ -437,9 +450,9 @@ data stack.
 +--------+-----------+-----------+---+-----------+
 |  9     | RETURN    | ;,        |   | ``-``     |
 +--------+-----------+-----------+---+-----------+
-| 10     | LT_JUMP   | <jump,    | x | ``xy-``   |
+| 10     | GT_JUMP   | >jump,    | x | ``xy-``   |
 +--------+-----------+-----------+---+-----------+
-| 11     | GT_JUMP   | >jump,    | x | ``xy-``   |
+| 11     | LT_JUMP   | <jump,    | x | ``xy-``   |
 +--------+-----------+-----------+---+-----------+
 | 12     | NE_JUMP   | !jump,    | x | ``xy-``   |
 +--------+-----------+-----------+---+-----------+
@@ -647,38 +660,7 @@ Return from a call to a subroutine. This will pop the return address from
 the address stack, and set the instruction pointer to it.
 
 
-Opcode 10: LT_JUMP
-------------------
-Increment the instruction pointer.
-
-Pop the top two values from the stack. If the first stack item is less than
-the second item, set the instruction pointer to the address stored at the
-memory location following this instruction. If not, continue execution.
-
-This instruction needs to decrement the requested address by one to
-account for the increment of the instruction pointer by the opcode process
-cycle. E.g., if the jump target is 1234, the instruction pointer should be
-set to 1233.
-
-In memory, this will be stored as:
-
-::
-
-  0000 LT_JUMP
-  0001 destination
-
-+--------+-------+
-| before | after |
-+========+=======+
-| +---+  |       |
-| | 1 |  |       |
-| +---+  |       |
-| | 2 |  |       |
-| +---+  |       |
-+--------+-------+
-
-
-Opcode 11: GT_JUMP
+Opcode 10: GT_JUMP
 ------------------
 Increment the instruction pointer.
 
@@ -696,6 +678,37 @@ In memory, this will be stored as:
 ::
 
   0000 GT_JUMP
+  0001 destination
+
++--------+-------+
+| before | after |
++========+=======+
+| +---+  |       |
+| | 1 |  |       |
+| +---+  |       |
+| | 2 |  |       |
+| +---+  |       |
++--------+-------+
+
+
+Opcode 11: LT_JUMP
+------------------
+Increment the instruction pointer.
+
+Pop the top two values from the stack. If the first stack item is less than
+the second item, set the instruction pointer to the address stored at the
+memory location following this instruction. If not, continue execution.
+
+This instruction needs to decrement the requested address by one to
+account for the increment of the instruction pointer by the opcode process
+cycle. E.g., if the jump target is 1234, the instruction pointer should be
+set to 1233.
+
+In memory, this will be stored as:
+
+::
+
+  0000 LT_JUMP
   0001 destination
 
 +--------+-------+
@@ -1114,10 +1127,13 @@ With the values in this table, port 2 would be set to a value of 1.
 
 Opcode 30: WAIT
 ---------------
-Run the simulated device handler. Before calling this, the code being run should
-set I/O port 0 to 0 to ensure that a request is actually handled. If no requests
-are pending (based on the values written to the ports previously), continue
-execution as normal.
+Run the simulated device handler, provided that port 0 is set to 0,
+and at least one other port is set to a value other than 0. Otherwise,
+continue execution as normal.
+
+If the device handler runs, it will setting port 0 to 1, thus preventing
+itself from running again until the code sets port 0 back to 0. Therefore,
+programs should always set I/O port 0 to 0 before invoking WAIT.
 
 
 Opcodes Above 30

@@ -2,6 +2,7 @@
  * Ngaro for Mono / .NET
  *
  * Copyright (c) 2009 - 2011, Simon Waite and Charles Childers
+ * Copyright (c) 2012,        Todd Thomas
  *
  * Please compile with `gmcs` as `mcs` seems to have a
  * simple Console.in implementation.
@@ -18,11 +19,16 @@ namespace Retro.Ngaro
     /* Registers */
     int sp, rsp, ip, shrink;
     int[] data, address, ports, memory;
+    string request;
 
     /* Input Stack  */
-    string[] inputs;
+    byte[] [] inputs;
     int[] lengths;
-    int isp, offset;
+    int[] offset;
+    int isp;
+    static readonly int MAX_OPEN_FILES = 8;
+    static readonly int MAX_REQUEST_LENGTH = 1024;
+    FileStream[] files = {null,null,null,null,null,null,null,null};
 
 
     /* Opcodes recognized by the VM */
@@ -40,6 +46,171 @@ namespace Retro.Ngaro
       VM_WAIT
     }
 
+    void rxSetTextColor(int color, int arg)
+    {
+        ConsoleColor col = ConsoleColor.White;
+        bool valid = true;
+        switch (color)
+        {
+            case 0:
+                col = ConsoleColor.Black;
+                break;
+            case 1:
+                col = ConsoleColor.Red;
+                break;
+            case 2:
+                col = ConsoleColor.Green;
+                break;
+            case 3:
+                col = ConsoleColor.Yellow;
+                break;
+            case 4:
+                col = ConsoleColor.Blue;
+                break;
+            case 5:
+                col = ConsoleColor.Magenta;
+                break;
+            case 6:
+                col = ConsoleColor.Cyan;
+                break;
+            case 7:
+                col = ConsoleColor.White;
+                break;
+            default:
+                valid = false;
+                break;
+        }
+        if (valid)
+        {
+            if (arg == 1)
+                Console.ForegroundColor = col;
+            else
+                Console.BackgroundColor = col;
+        }
+    }
+
+    void rxGetString(int starting)
+    {
+        int i = 0;
+        char[] requestTmp = new char[MAX_REQUEST_LENGTH];
+        while (memory[starting] > 0 && i < MAX_REQUEST_LENGTH)
+        {
+            requestTmp[i++] = (char)memory[starting++];
+        }
+        //requestTmp[i] = (char)0;
+        request = new string(requestTmp);
+        request = request.TrimEnd('\0');
+    }
+
+    int rxGetFileHandle()
+    {
+        int i;
+        for (i = 1; i < MAX_OPEN_FILES; i++)
+        {
+            if (files[i] == null)
+                return i;
+        }
+        return 0;
+    }
+
+    int rxOpenFile()
+    {
+        int slot = rxGetFileHandle();
+        int mode = data[sp--];
+        int name = data[sp--];
+        rxGetString(name);
+        if (slot > 0)
+        {
+            if (mode == 0)
+            {
+                try
+                {
+                    files[slot] = File.Open(request, FileMode.Open, FileAccess.Read);
+                }
+                catch
+                {
+                    files[slot] = null;
+                    slot = 0;
+                }
+            }
+            if (mode == 1) files[slot] = File.Open(request, FileMode.OpenOrCreate,FileAccess.Write);
+            if (mode == 2) files[slot] = File.Open(request, FileMode.Append,FileAccess.Write);
+            if (mode == 3)
+            {
+                try
+                {
+                    files[slot] = File.Open(request, FileMode.Open, FileAccess.ReadWrite);
+                }
+                catch
+                {
+                    files[slot] = null;
+                    slot = 0;
+                }
+            }
+        }
+        return slot;
+    }
+
+    int rxReadFile()
+    {
+        int c = files[data[sp--]].ReadByte();
+        return c == -1 ? 0 : c;
+    }
+
+    int rxWriteFile()
+    {
+        int slot = data[sp--];
+        int c = data[sp--];
+        files[slot].WriteByte((byte)c);
+        return 1;
+    }
+
+    int rxCloseFile()
+    {
+        int tos = data[sp--];
+        files[tos].Close();
+        files[tos] = null;
+        return 0;
+    }
+
+    int rxGetFilePosition()
+    {
+        int slot = data[sp--];
+        return (int)files[slot].Position;
+    }
+
+    int rxSetFilePosition()
+    {
+        int slot = data[sp--];
+        int pos = data[sp--];
+        return (int)files[slot].Seek(pos, SeekOrigin.Begin);
+    }
+
+    int rxGetFileSize()
+    {
+        int slot = data[sp--];
+        return (int)files[slot].Length;
+    }
+
+    int rxDeleteFile()
+    {
+        int name = data[sp--];
+        rxGetString(name);
+        if(File.Exists(request))
+        {
+            try
+            {
+                File.Delete(request);
+            }
+            catch
+            {
+                return 0;
+            }
+            return -1;
+        }
+        return 0;
+    }
+
 
     /* Initialize the VM */
     public VM() {
@@ -51,10 +222,10 @@ namespace Retro.Ngaro
       ports   = new int[12];
       memory  = new int[1000000];
 
-      inputs  = new string[12];
+      inputs  = new byte[12][];
       lengths = new int[12];
       isp = 0;
-      offset = 0;
+      offset = new int[12];
 
       loadImage();
 
@@ -109,14 +280,13 @@ namespace Retro.Ngaro
       int a = 0;
 
       /* Check to see if we need to move to the next input source */
-      if (isp > 0 && offset == lengths[isp]) {
+      if (isp > 0 && offset[isp] == (lengths[isp])) {
         isp--;
-        offset = 0;
+        offset[isp] = 0;
       }
 
       if (isp > 0) {      /* Read from a file */
-        a = (int)inputs[isp][offset];
-        offset++;
+        a = (int)inputs[isp][offset[isp]++];
       }
       else {              /* Read from Console */
         ConsoleKeyInfo cki = Console.ReadKey();
@@ -156,26 +326,63 @@ namespace Retro.Ngaro
         ports[2] = 0;
       }
 
-      /* File Operations: Save Image */
-      if (ports[4] == 1) {
-        saveImage();
-        ports[4] = 0;
-      }
 
-      /* File Operations: Add to Input Stack */
-      if (ports[4] == 2) {
-        ports[4] = 0;
-        int i = 0;
-        char[] s = new char[1024];
-        int name = data[sp]; sp--;
-        while(memory[name] != 0) {
-          s[i] = (char)memory[name];
-          i++; name++;
-        }
-        isp++;
-        inputs[isp]  = System.IO.File.ReadAllText(new String(s,0,i));
-        lengths[isp] = inputs[isp].Length;
-      }
+      switch(ports[4])
+      {
+          /* File Operations: Save Image */
+          case 1: {
+            saveImage();
+            ports[4] = 0;
+            break;
+          }
+
+          /* File Operations: Add to Input Stack */
+          case 2: {
+            ports[4] = 0;
+            int i = 0;
+            char[] s = new char[1024];
+            int name = data[sp]; sp--;
+            while(memory[name] != 0) {
+              s[i] = (char)memory[name];
+              i++; name++;
+            }
+            isp++;
+            inputs[isp] = System.IO.File.ReadAllBytes(new String(s, 0, i));// System.IO.File.ReadAllText(new String(s, 0, i));
+            lengths[isp] = inputs[isp].Length;
+            offset[isp] = 0;
+          }
+          break;
+
+
+          case -1:
+              ports[4] = rxOpenFile();
+              break;
+          case -2:
+              ports[4] = rxReadFile();
+              break;
+          case -3:
+              ports[4] = rxWriteFile();
+              break;
+          case -4:
+              ports[4] = rxCloseFile();
+              break;
+          case -5:
+              ports[4] = rxGetFilePosition();
+              break;
+          case -6:
+              ports[4] = rxSetFilePosition();
+              break;
+          case -7:
+              ports[4] = rxGetFileSize();
+              break;
+          case -8:
+              ports[4] = rxDeleteFile();
+              break;
+          default:
+              ports[4] = 0;
+              break;
+    }
+
 
       /* Capabilities */
       if (ports[5] == -1)
@@ -216,11 +423,37 @@ namespace Retro.Ngaro
         }
         memory[name] = 0;
         ports[5] = 0;
+
       }
+
       if (ports[5] == -11)
         ports[5] = Console.WindowWidth;
       if (ports[5] == -12)
         ports[5] = Console.WindowHeight;
+      if (ports[5] == -15)
+          ports[5] = -1;
+
+      int tos;
+      int nos;
+      switch (ports[8])
+      {
+          case 1:
+              tos = data[sp--];
+              nos = data[sp--];
+              Console.SetCursorPosition(tos, nos);
+              break;
+          case 2:
+              tos = data[sp--];
+              rxSetTextColor(tos, 1);
+              break;
+          case 3:
+              tos = data[sp--];
+              rxSetTextColor(tos, 2);
+              break;
+          default:
+              break;
+      }
+      ports[8] = 0;
     }
 
 
@@ -414,7 +647,7 @@ namespace Retro.Ngaro
         if (args[i] == "--with") {
           i++;
           vm.isp++;
-          vm.inputs[vm.isp] = System.IO.File.ReadAllText(args[i]);
+          vm.inputs[vm.isp] = System.IO.File.ReadAllBytes(args[i]);// System.IO.File.ReadAllText(args[i]);
           vm.lengths[vm.isp] = vm.inputs[vm.isp].Length;
         }
       }

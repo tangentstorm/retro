@@ -99,8 +99,9 @@ may provide non-standard devices on port numbers above or below this range.</p>
 </table>
 <div class="section" id="port-0-wait-for-hardware-event">
 <h2>Port 0: Wait for Hardware Event</h2>
-<p>This is used to determine if Ngaro should enter a wait for hardware event
-loop. It should be set to 0, then use the WAIT instruction.</p>
+<p>This port is used to synchronize communication between the ngaro and
+the virtual hardware devices.</p>
+<p>See the description of the WAIT opcode for details.</p>
 <p>Usage Example:</p>
 <pre class="literal-block">
 #0 #0 out, wait,
@@ -122,7 +123,8 @@ then read the key value from port 1.</p>
 <p>Ngaro provides a hardware character generator. This takes data off the stack,
 so you should make sure the character value is <em>on the stack</em> before using it.
 To use this, write the value 1 to port 2 and wait for an I/O event.</p>
-<p>The VM is expected to clear the screen when a negative value is passed.</p>
+<p>When a negative value is passed, the VM should clear the screen and position
+the cursor in the upper left corner.</p>
 <p>Usage Example:</p>
 <pre class="literal-block">
 #98 #1 #2 out,
@@ -163,6 +165,19 @@ then read the value back in from port 4.</p>
 </tr>
 </thead>
 <tbody valign="top">
+<tr><td>1</td>
+<td><ul class="first last simple">
+<li></li>
+</ul>
+</td>
+<td>0</td>
+<td>Save the image</td>
+</tr>
+<tr><td>2</td>
+<td>filename</td>
+<td>0</td>
+<td>Include a file ( like --with )</td>
+</tr>
 <tr><td>-1</td>
 <td>filename, mode</td>
 <td>handle</td>
@@ -170,7 +185,7 @@ then read the value back in from port 4.</p>
 </tr>
 <tr><td>-2</td>
 <td>handle</td>
-<td>flag</td>
+<td>byte</td>
 <td>Read a byte from a file</td>
 </tr>
 <tr><td>-3</td>
@@ -310,14 +325,21 @@ the deletion fails.</p>
 <tr><td>-15</td>
 <td>-1 if Port 8 enabled, 0 if disabled</td>
 </tr>
+<tr><td>-16</td>
+<td>Return max depth of data stack</td>
+</tr>
+<tr><td>-17</td>
+<td>Return max depth of address stack</td>
+</tr>
 </tbody>
 </table>
 <p>At a minimum, an implementation must provide support for -1, -5, -6, -8, and -9.</p>
+<p>For -5 and -6, &quot;depth&quot; refers to the number of items on the specified stack.</p>
 <p>For -10, the application must provide a buffer address on the stack, and a
 pointer to a string. The VM should search the system environment for the
-string and copy its value to the application memory, starting at the providedbuffer address.
-If an environment variable is not found, the VM should store a value of zero in the provided
-buffer address.</p>
+string and copy its value to the application memory, starting at the provided
+buffer address. If an environment variable is not found, the VM should store a
+value of zero in the provided buffer address.</p>
 <p>For -13, if the returned value is zero, the image can assume a 32-bit environment.</p>
 <p>For -14, if the VM is using big endian internally, this should return a value of 1.</p>
 </div>
@@ -2106,10 +2128,12 @@ and the second will be a value. Store the value in the I/O port specified.</p>
 </div>
 <div class="section" id="opcode-30-wait">
 <h3>Opcode 30: WAIT</h3>
-<p>Run the simulated device handler. Before calling this, the code being run should
-set I/O port 0 to 0 to ensure that a request is actually handled. If no requests
-are pending (based on the values written to the ports previously), continue
-execution as normal.</p>
+<p>Run the simulated device handler, provided that port 0 is set to 0,
+and at least one other port is set to a value other than 0. Otherwise,
+continue execution as normal.</p>
+<p>If the device handler runs, it will setting port 0 to 1, thus preventing
+itself from running again until the code sets port 0 back to 0. Therefore,
+programs should always set I/O port 0 to 0 before invoking WAIT.</p>
 </div>
 <div class="section" id="opcodes-above-30">
 <h3>Opcodes Above 30</h3>

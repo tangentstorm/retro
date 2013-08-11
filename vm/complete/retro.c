@@ -41,7 +41,7 @@
    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
 #define CELL            int32_t
 #define IMAGE_SIZE      1000000
-#define ADDRESSES          1024
+#define ADDRESSES          1024*1024
 #define STACK_DEPTH         128
 #define PORTS                12
 #define MAX_FILE_NAME      1024
@@ -96,7 +96,8 @@ typedef struct {
   FILE *input[MAX_OPEN_FILES];
   CELL isp;
   CELL image[IMAGE_SIZE];
-  CELL shrink, padding;
+  CELL shrink;
+  CELL filecells; // in image on disk
   int stats[NUM_OPS + 1];
   int max_sp, max_rsp;
   char filename[MAX_FILE_NAME];
@@ -267,6 +268,7 @@ CELL rxLoadImage(VM *vm, char *image) {
     printf("Unable to find the retroImage!\n");
     exit(1);
   }
+  vm->filecells = x;
   return x;
 }
 
@@ -397,6 +399,10 @@ void rxDeviceHandler(VM *vm) {
                   break;
         case -15: vm->ports[5] = -1;
                   break;
+        case -16: vm->ports[5] = STACK_DEPTH;
+                  break;
+        case -17: vm->ports[5] = ADDRESSES;
+                  break;
         default:  vm->ports[5] = 0;
       }
     }
@@ -480,26 +486,18 @@ void rxProcessOpcode(VM *vm) {
     case VM_JUMP:
          IP++;
          IP = vm->image[IP] - 1;
-         if (IP < 0)
-           IP = IMAGE_SIZE;
-         else {
-           if (vm->image[IP+1] == 0)
-             IP++;
-           if (vm->image[IP+1] == 0)
-             IP++;
-         }
+         if (vm->image[IP+1] == 0)
+           IP++;
+         if (vm->image[IP+1] == 0)
+           IP++;
          break;
     case VM_RETURN:
          IP = TORS;
          RSP--;
-         if (IP < 0)
-           IP = IMAGE_SIZE;
-         else {
-           if (vm->image[IP+1] == 0)
-             IP++;
-           if (vm->image[IP+1] == 0)
-             IP++;
-         }
+         if (vm->image[IP+1] == 0)
+           IP++;
+         if (vm->image[IP+1] == 0)
+           IP++;
          break;
     case VM_GT_JUMP:
          IP++;
@@ -598,7 +596,6 @@ void rxProcessOpcode(VM *vm) {
          vm->ports[a] = 0;
          break;
     case VM_OUT:
-         vm->ports[0] = 0;
          vm->ports[TOS] = NOS;
          DROP DROP
          break;
@@ -610,14 +607,11 @@ void rxProcessOpcode(VM *vm) {
          TORS = IP;
          IP = vm->image[IP] - 1;
 
-         if (IP < 0)
-           IP = IMAGE_SIZE;
-         else {
-           if (vm->image[IP+1] == 0)
-             IP++;
-           if (vm->image[IP+1] == 0)
-             IP++;
-         }
+         if (vm->image[IP+1] == 0)
+           IP++;
+         if (vm->image[IP+1] == 0)
+           IP++;
+
          if (vm->max_rsp < RSP)
            vm->max_rsp = RSP;
          break;
@@ -671,10 +665,43 @@ void rxDisplayStats(VM *vm)
   printf("Total opcodes processed: %d\n", i);
 }
 
+/* Dump ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
+
+// see /test/ngaro/ngarotest.py
+
+#define FILSEP printf( "\x1C" )
+#define GRPSEP printf( "\x1D" )
+
+// print all cells in an array, separated by spaces
+// stacks use base 1 indexing, but ram uses base 0
+// so we have to compensate for that
+void dumparray( CELL arr[], int base, int last ) {
+  int i, count;
+  count = last - base + 1;
+  // printf( "\n\nlast: %i   data[0:2] = [ %i %i ]\n", last, arr[ 0 ], arr[ 1 ] );
+  // printf( "count = %d\n\n", count );
+  if ( count > 0 ) {
+    if ( count > 1 )
+      for ( i = 0; i < count - 1; ++i )
+	printf( "%i ", arr[ base + i ]);
+    printf( "%i", arr[ last ]);
+  }
+}
+
+void rxDump(VM *vm) {
+  FILSEP;
+  dumparray( vm->data, 1, SP );
+  GRPSEP;
+  dumparray( vm->address, 1, RSP );
+  GRPSEP;
+  dumparray( vm->image, 0, vm->filecells - 1 );
+}
+
+
 /* Main ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
 int main(int argc, char **argv) {
   VM *vm;
-  int i, wantsStats;
+  int i, wantsStats, dumpAfter;
 
   /* ATH */
   char *env;
@@ -696,12 +723,15 @@ int main(int argc, char **argv) {
       vm->shrink = 1;
     if (strcmp(argv[i], "--stats") == 0)
       wantsStats = 1;
+    if (strcmp(argv[i], "--dump") == 0)
+      dumpAfter = 1;
     if (strcmp(argv[i], "--help") == 0)
     {
       printf("--with filename    Add filename to the input stack\n");
       printf("--image filename   Use filename as the image to load\n");
       printf("--shrink           When saving, don't save unused cells\n");
       printf("--stats            Display opcode usage and stack summaries upon exit\n");
+      printf("--dump             Dump stacks and image upon exit, for ngarotest.py\n");
       printf("--help             Display this text\n");
       exit(1);
     }
@@ -709,15 +739,15 @@ int main(int argc, char **argv) {
 
   /* ATH - 26 January 2012
    *
-   * Check for the existence of the file name held in vm->filename.
-   * If it does not exist read the env variable RETROIMAGE and check for the existence of that file.
-   * If that does not exists exit with an error.
+   * Check for the existence of the file name held in vm->filename
+   * If it does not exist, read the env variable RETROIMAGE and check for
+   * the existence of that file. If that file does not exist,
+   * exit with an error.
    *
    */
 
   if ( ( stat( vm->filename, &sts) == -1 ) && errno == ENOENT ) {
       // File doesn't exist, get the environment variable.
-      //
       env = (char *)getenv("RETROIMAGE");
       if( !env ) {
         fprintf(stderr,"No image file and environment variable RETROIMAGE not set.\n");
@@ -740,6 +770,8 @@ int main(int argc, char **argv) {
 
   if (wantsStats == 1)
     rxDisplayStats(vm);
+  if (dumpAfter == 1)
+    rxDump( vm );
 
   free(vm);
   return 0;

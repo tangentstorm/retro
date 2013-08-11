@@ -1,9 +1,11 @@
 #!/usr/bin/env python
 
 # Ngaro VM
-# Copyright (c) 2010 - 2011, Charles Childers
-# Optimizations and process() rewrite by Greg Copeland
+# Copyright (c) 2010 - 2012, Charles Childers
+# Copyright (c) 2011 Greg Copeland ( optimizations and process() rewrite )
+# Copyright (c) 2012 Michal J Wallace ( --dump )
 # -----------------------------------------------------------------------------
+
 import os, sys, math, time, struct
 from struct import pack, unpack
 
@@ -13,7 +15,8 @@ try:
     set_termio = True
 except: pass
 
-EXIT = 0x0FFFFFFF
+EXIT = 0x0FFFFFFF # preliminary value
+
 # -----------------------------------------------------------------------------
 def rxDivMod( a, b ):
   x = abs(a)
@@ -44,6 +47,7 @@ def rxGetInput( inputs ):
     a = ord(sys.stdin.read(1))
   return a
 
+
 # -----------------------------------------------------------------------------
 def rxHandleDevices( ip, stack, address, ports, memory, files, inputs ):
   ports[0] = 1
@@ -52,6 +56,7 @@ def rxHandleDevices( ip, stack, address, ports, memory, files, inputs ):
     if ports[1] == 13:
       ports[1] = 10
   if ports[2] == 1:
+    #  TODO: account for unicode correctly
     if stack[-1] > 0 and stack[-1] < 128:
       if stack[-1] == 8:
         sys.stdout.write(chr(stack.pop()))
@@ -191,6 +196,10 @@ def rxHandleDevices( ip, stack, address, ports, memory, files, inputs ):
     ports[5] = 0
   elif ports[5] == -15: # console extensions
     ports[5] = -1
+  elif ports[5] == -16: # data stack max depth
+    ports[5] = 128
+  elif ports[5] == -17: # address stack max depth
+    ports[5] = 1024
 
   if ports[8] == 1:
     ports[8] = 0
@@ -209,22 +218,33 @@ def rxHandleDevices( ip, stack, address, ports, memory, files, inputs ):
 
   return ip
 
-
+
 # -----------------------------------------------------------------------------
 def process( memory, inputs ):
   ip = 0
-  ext = EXIT
+  global EXIT
+  EXIT = len( memory )
   stack = [] * 128
   address = [] * 1024
   ports = [0] * 12
   files = [0] * 8
 
-  while ip < ext:
+  while ip < EXIT:
     opcode = memory[ip]
 
-    # If opcode is not one we know,
-    # jump past it. We have 30-opcodes.
-    if opcode <= 30:
+    # There are 31 opcodes ( 0 .. 30 ).
+    # Instructions above this range are treated as implicit calls.
+
+    if opcode > 30:
+      address.append( ip )
+      ip = memory[ip] - 1
+      try:
+        while memory[ip + 1] == 0:
+          ip += 1
+      except IndexError: pass
+
+    else:
+
       if   opcode ==  0:   # nop
         pass
 
@@ -375,49 +395,83 @@ def process( memory, inputs ):
         if ports[0] == 0:
           ip = rxHandleDevices( ip, stack, address, ports, memory, files, inputs )
 
-    else:
-      address.append( ip )
-      ip = memory[ip] - 1
-      if memory[ip + 1] == 0:
-        ip += 1
-        if memory[ip + 1] == 0:
-          ip += 1
-
     ip += 1
+  return stack, address, memory
 
+
+def dump( stack, address, memory ):
+  """
+  dumps the vm state. for use with /test/ngarotest.py
+  triggered when --dump passed to the program.
+  """
+  fsep = chr( 28 ) # file separator
+  gsep = chr( 29 ) # group separator
+  sys.stdout.write( fsep )
+  sys.stdout.write( ' '.join( map( str, stack )))
+  sys.stdout.write( gsep )
+  sys.stdout.write( ' '.join( map( str, address )))
+  sys.stdout.write( gsep )
+  sys.stdout.write( ' '.join( map( str, memory )))
 
+
 # -----------------------------------------------------------------------------
 def run():
-  cells = int(os.path.getsize('retroImage') / 4)
-  inputs = [0] * 12
-  inputs.append(0)
 
-  f = open( 'retroImage', 'rb' )
+  imgpath = None
+  dump_after = False
+  
+  # inputs contains the stack of file objects to read input from
+  # the 0 just acts as a sentinel to indicate there are no more
+  # inputs and retro should go back to reading from the console.
+  inputs = [0]
+
+  i = 1 # sys.argv[0] is 'retro.py', okay to skip
+  while i < len(sys.argv):
+    arg = sys.argv[i]
+    if arg == "--with":
+      i += 1
+      inputs.append( open( sys.argv[i], 'r' ))
+    elif arg == "--dump":
+      dump_after = True
+    elif arg == "--image":
+      i += 1
+      arg = sys.argv[i]
+      if os.path.exists(arg): imgpath = arg
+    else:
+      print "file not found: %r" % arg
+      sys.exit(-2)
+    i += 1
+  del i
+  imgpath = imgpath or 'retroImage'
+
+  # print "imgpath:", imgpath
+  cells = int(os.path.getsize(imgpath) / 4)
+  f = open( imgpath, 'rb' )
   memory = list(struct.unpack( cells * 'i', f.read() ))
   f.close()
 
-  remaining = 1000000 - cells
-  memory.extend( [0] * remaining )
+  if not dump_after:
+    remaining = 1000000 - cells
+    memory.extend( [0] * remaining )
 
-  if len(sys.argv) > 2:
-    i = 0
-    while i < len(sys.argv):
-      if sys.argv[i] == "--with":
-        i += 1
-        inputs.append( open( sys.argv[i], 'r' ) )
-      i += 1
-
+  global set_termio
   if set_termio:
-    old = termios.tcgetattr(sys.stdin.fileno())
+    try: old = termios.tcgetattr(sys.stdin.fileno())
+    except: set_termio = False
+  if set_termio:
     t = termios.tcgetattr(sys.stdin.fileno())
     t[3] = t[3] & ~(termios.ICANON | termios.ECHO | termios.ISIG)
     t[0] = 0
     termios.tcsetattr(sys.stdin.fileno(), termios.TCSANOW, t)
-  try: process( memory, inputs )
-  except: pass
-  if set_termio:
-    termios.tcsetattr(sys.stdin.fileno(), termios.TCSANOW, old)
-
+  try:
+    stack, address, memory = process(memory, inputs)
+    if dump_after: dump(stack, address, memory)
+  except:
+    raise
+  finally:
+    if set_termio:
+      termios.tcsetattr(sys.stdin.fileno(), termios.TCSANOW, old)
+
 # -----------------------------------------------------------------------------
 if __name__ == "__main__":
   run()

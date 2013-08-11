@@ -23,7 +23,28 @@ sbcl:
 image: retro
 	cd image && cat meta.rx kernel.rx >../core.rx
 	./retro --shrink --image retroImage --with core.rx
+	./retro --shrink --image retroImage --with image/stage2.rx
 	rm core.rx
+
+smallimage: retro
+	cd image && cat meta.rx kernel.rx | grep -v \"\ \:doc >../core.rx
+	cp retroImage smallRetroImage
+	./retro --shrink --image smallRetroImage --with core.rx
+	cd image && cat stage2.rx | grep -v \"\ \:doc >../s2small.rx
+	./retro --shrink --image retroImage --with s2small.rx
+	rm core.rx s2small.rx
+
+tinyimage: retro
+	cd image && cat meta.rx kernel.rx | grep -v \"\ \:doc >../core.rx
+	cp retroImage tinyRetroImage
+	./retro --shrink --image tinyRetroImage --with core.rx
+	rm core.rx
+
+docstrings:
+	cp retroImage helpImage
+	./retro --image helpImage --with tools/exportDocstrings.rx
+	./retro --image helpImage >doc/Function_List.md
+	rm helpImage
 
 jsimage:
 	./retro --with vm/web/html5/dumpImage.rx

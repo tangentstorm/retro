@@ -1,0 +1,54 @@
+( ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ )
+( Parable Memory Manager                                                      )
+( ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ )
+( Copyright [c] 2012, Charles Childers                                        )
+( License: ISC                                                                )
+( ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ )
+
+chain: slices'
+
+  create map
+    1024 allot
+  "( -a ) map of allocated slices" :doc
+
+  create slices
+    1024 128 * allot
+  "( -a ) buffer containing slices" :doc
+
+  variable give
+  "( -a ) [to be described]" :doc
+
+  : toSlice  ( n-a )
+    128 * slices + ;
+  "( n-a ) map a slice id to an address" :doc
+
+  : findUnusedSlice ( -n )
+    0 &give !
+    #0 1000 [ #1 + dup map + @ #0 == [ dup &give ! ] ifTrue ] times drop &give @ ;
+  "( -n ) return the number o fan unused slice" :doc
+
+  : markUsed  ( n-n )
+    [ map + on ] sip ;
+  "( n-n ) mark a slice as being used" :doc
+
+  : request  ( -n )
+    findUnusedSlice markUsed ;
+  "( -n ) request a slice. returns a slice number" :doc
+
+  : release  ( n- )
+    map + off ;
+  "( n- ) release a used slice" :doc
+
+  : fetch  ( slice offset - value )
+    [ toSlice ] dip + @ ;
+  "( slice offset - value ) fetch a value stored in a slice" :doc
+
+  : store  ( value slice offset - )
+    [ toSlice ] dip + ! ;
+  "( value slice offset - ) store a value into a slice" :doc
+
+  : copy   ( source dest - )
+    [ toSlice ] bi@ 128 copy ;
+  "( source dest - ) copy a slice into another slice" :doc
+
+;chain
