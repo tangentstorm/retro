@@ -255,7 +255,9 @@ w: getc getc
   repeat getc:unfiltered keymap:handler remapKeys dup, 0 # !if remap:whitespace ; then drop, again ;
 "( -c ) Read a keypress and return the ASCII value on the stack.\nBoth remapping and keymaps are handled by this." :doc
 
-i: putc? dup, 8 # =if drop, break # @, ; then dup, putc ;
+w: (echo) (echo) dup, putc ;
+
+i: putc? dup, 8 # =if drop, break # @, ; then (echo) ;
 ( [ c-c ] helper to display characters and backspaces properly )
 
 i: eat    ( a-a )
@@ -270,7 +272,7 @@ i: (accept)
    repeat
      getc
      dup, 8 # =if drop, 1-, guard? jump: (accept) then
-     dup, putc
+     (echo)
      dup, break # @, =if drop, ; then
      swap, !+
    again ;
@@ -456,6 +458,11 @@ w: atib atib memory # @, STRING-LENGTH 2 # * - ;
 
 w: " t-" ' atib # ' tib # :is '" # accept ' tib # :devector atib ;
 "( ``-$ ) temporary function to create strings until __`` is defined" :doc
+
+i: pass ;
+w: hush hush ( - )  ' pass # ' (echo) #  :is ; "disable input echo" :doc
+w: echo echo ( - )  ' (echo) # :devector ;     "enable input echo" :doc
+
 
 ( Numbers [Parsing & Display] ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ )
 4 elements #value num negate? flag
